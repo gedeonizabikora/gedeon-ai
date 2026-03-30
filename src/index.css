@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter+Tight:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-nebula-black: #050505;
+  --color-nebula-white: #FFFFFF;
+  --color-nebula-silver: #A1A1AA;
+  --color-nebula-cyan: #00F0FF;
+  --color-nebula-amber: #FFB000;
+  --color-nebula-purple: #8A2BE2;
+  --color-nebula-blue: #4169E1;
+}
+
+body {
+  background-color: var(--color-nebula-black);
+  color: var(--color-nebula-white);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+/* Gradient Mesh Background */
+.bg-mesh {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  background: 
+    radial-gradient(circle at 15% 85%, rgba(138, 43, 226, 0.15) 0%, transparent 50%),
+    radial-gradient(circle at 85% 15%, rgba(65, 105, 225, 0.15) 0%, transparent 50%);
+  filter: blur(60px);
+  animation: mesh-breathe 10s ease-in-out infinite alternate;
+}
+
+@keyframes mesh-breathe {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(1.1); opacity: 1; }
+}
+
+/* Glassmorphism Panel */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+}
+
+/* Glow Border Button */
+.glow-button {
+  position: relative;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 9999px;
+  transition: all 0.3s ease;
+  z-index: 1;
+}
+
+.glow-button::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 9999px;
+  padding: 1px;
+  background: linear-gradient(45deg, rgba(255,255,255,0.1), rgba(255,255,255,0.5), rgba(255,255,255,0.1));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+}
+
+.glow-button:hover::before {
+  opacity: 1;
+}
+
+.glow-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+}
+
+/* Streaming Text Bleed */
+.text-bleed {
+  background: linear-gradient(90deg, #FFFFFF 50%, rgba(255,255,255,0) 100%);
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: bleed-in 1.5s ease-out forwards;
+}
+
+@keyframes bleed-in {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

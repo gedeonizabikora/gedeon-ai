@@ -1,0 +1,7 @@
+{
+  "name": "Midnight Nebula AI",
+  "description": "A next-gen voice and text AI assistant interface featuring Glassmorphism 2.0 and a 3D fluid core visualizer.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
