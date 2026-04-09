@@ -38,6 +38,9 @@ export default function App() {
   const [voice, setVoice] = useState('Kore');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [responseStyle, setResponseStyle] = useState<'summarized' | 'detailed'>('summarized');
+  const [ttsEngine, setTtsEngine] = useState<'cloud' | 'local'>('cloud');
+  const [localVoices, setLocalVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedLocalVoice, setSelectedLocalVoice] = useState<string>('');
 
   const VOICES = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
   
@@ -45,6 +48,7 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -54,10 +58,32 @@ export default function App() {
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    const loadVoices = () => {
+      if ('speechSynthesis' in window) {
+        const voices = window.speechSynthesis.getVoices();
+        setLocalVoices(voices);
+        if (voices.length > 0 && !selectedLocalVoice) {
+          // Try to find a good default English voice, otherwise pick the first one
+          const defaultVoice = voices.find(v => v.lang.startsWith('en-') && v.name.includes('Google')) || voices[0];
+          setSelectedLocalVoice(defaultVoice.voiceURI);
+        }
+      }
+    };
+
+    loadVoices();
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+  }, []);
+
   const stopAudio = () => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
     }
     setAiState('idle');
   };
@@ -67,6 +93,23 @@ export default function App() {
       setAiState('idle');
       return;
     }
+
+    // Stop any ongoing audio before starting new
+    stopAudio();
+    setAiState('speaking');
+
+    if (ttsEngine === 'local' && 'speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      if (selectedLocalVoice) {
+        const voice = localVoices.find(v => v.voiceURI === selectedLocalVoice);
+        if (voice) utterance.voice = voice;
+      }
+      utterance.onend = () => setAiState('idle');
+      utterance.onerror = () => setAiState('idle');
+      window.speechSynthesis.speak(utterance);
+      return;
+    }
+
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
@@ -213,14 +256,43 @@ export default function App() {
 
   const toggleListening = () => {
     if (aiState === 'listening') {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
       setAiState('idle');
     } else {
       setAiState('listening');
-      // Simulate voice input for now
-      setTimeout(() => {
-        setInputValue('Muraho Gedeon, tell me about Rusizi district.');
+      
+      // @ts-ignore
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognitionRef.current = recognition;
+        recognition.continuous = false;
+        recognition.interimResults = true;
+
+        recognition.onresult = (event: any) => {
+          const transcript = Array.from(event.results)
+            .map((result: any) => result[0])
+            .map((result: any) => result.transcript)
+            .join('');
+          setInputValue(transcript);
+        };
+
+        recognition.onerror = (event: any) => {
+          console.error("Speech recognition error", event.error);
+          setAiState('idle');
+        };
+
+        recognition.onend = () => {
+          setAiState('idle');
+        };
+
+        recognition.start();
+      } else {
+        alert("Local speech recognition is not supported in this browser.");
         setAiState('idle');
-      }, 2000);
+      }
     }
   };
 
@@ -269,11 +341,18 @@ export default function App() {
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-[10px] font-mono text-nebula-silver uppercase tracking-wider">
-                      {msg.role === 'user' ? 'User' : 'Nebula'}
+                      {msg.role === 'user' ? 'User' : 'Gedeon'}
                     </span>
                     <span className="text-[10px] font-mono text-nebula-silver/40">
                       {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
+                    <button 
+                      onClick={() => playTTS(msg.content)} 
+                      className="text-nebula-silver/40 hover:text-nebula-cyan transition-colors" 
+                      title="Read aloud"
+                    >
+                      <Volume2 size={12} />
+                    </button>
                   </div>
                   <div 
                     className={`px-5 py-3.5 rounded-2xl max-w-[85%] text-sm md:text-base shadow-lg ${
@@ -534,17 +613,57 @@ export default function App() {
 
                 {/* Voice Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-nebula-silver mb-2 uppercase tracking-wider">Voice Persona</label>
-                  <div className="relative">
-                    <select
-                      value={voice}
-                      onChange={(e) => setVoice(e.target.value)}
-                      className="w-full bg-black/40 border border-white/10 text-white rounded-xl px-4 py-3 appearance-none focus:outline-none focus:border-nebula-cyan transition-colors cursor-pointer"
+                  <label className="block text-sm font-medium text-nebula-silver mb-2 uppercase tracking-wider">TTS Engine</label>
+                  <div className="flex gap-3 mb-4">
+                    <button
+                      onClick={() => setTtsEngine('cloud')}
+                      className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${ttsEngine === 'cloud' ? 'bg-nebula-cyan/20 text-nebula-cyan border border-nebula-cyan/30 shadow-[0_0_15px_rgba(0,240,255,0.1)]' : 'bg-black/40 text-nebula-silver border border-white/10 hover:text-white hover:bg-white/5'}`}
                     >
-                      {VOICES.map(v => <option key={v} value={v} className="bg-[#0a0a0a]">{v}</option>)}
-                    </select>
-                    <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-nebula-silver pointer-events-none" />
+                      Cloud (High Quality)
+                    </button>
+                    <button
+                      onClick={() => setTtsEngine('local')}
+                      className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${ttsEngine === 'local' ? 'bg-nebula-purple/20 text-nebula-purple border border-nebula-purple/30 shadow-[0_0_15px_rgba(176,38,255,0.1)]' : 'bg-black/40 text-nebula-silver border border-white/10 hover:text-white hover:bg-white/5'}`}
+                    >
+                      Local (Privacy)
+                    </button>
                   </div>
+                  
+                  {ttsEngine === 'cloud' && (
+                    <>
+                      <label className="block text-sm font-medium text-nebula-silver mb-2 uppercase tracking-wider">Cloud Voice Persona</label>
+                      <div className="relative">
+                        <select
+                          value={voice}
+                          onChange={(e) => setVoice(e.target.value)}
+                          className="w-full bg-black/40 border border-white/10 text-white rounded-xl px-4 py-3 appearance-none focus:outline-none focus:border-nebula-cyan transition-colors cursor-pointer"
+                        >
+                          {VOICES.map(v => <option key={v} value={v} className="bg-[#0a0a0a]">{v}</option>)}
+                        </select>
+                        <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-nebula-silver pointer-events-none" />
+                      </div>
+                    </>
+                  )}
+
+                  {ttsEngine === 'local' && localVoices.length > 0 && (
+                    <>
+                      <label className="block text-sm font-medium text-nebula-silver mb-2 mt-4 uppercase tracking-wider">Local System Voice</label>
+                      <div className="relative">
+                        <select
+                          value={selectedLocalVoice}
+                          onChange={(e) => setSelectedLocalVoice(e.target.value)}
+                          className="w-full bg-black/40 border border-white/10 text-white rounded-xl px-4 py-3 appearance-none focus:outline-none focus:border-nebula-cyan transition-colors cursor-pointer"
+                        >
+                          {localVoices.map(v => (
+                            <option key={v.voiceURI} value={v.voiceURI} className="bg-[#0a0a0a]">
+                              {v.name} ({v.lang})
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-nebula-silver pointer-events-none" />
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Response Style */}
