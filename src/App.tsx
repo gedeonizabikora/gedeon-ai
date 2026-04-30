@@ -4,10 +4,34 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Send, Settings, Volume2, VolumeX, Brain, Square, Sparkles, ImagePlus, Globe, Zap, X, ChevronDown } from 'lucide-react';
+import { Mic, MicOff, Send, Settings, Volume2, VolumeX, Brain, Square, Sparkles, ImagePlus, Globe, Zap, X, ChevronDown, User, LogOut, Shield, ArrowLeft, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import CoreVisualizer from './components/CoreVisualizer';
 import { GoogleGenAI, ThinkingLevel, Modality } from '@google/genai';
+import { auth, db } from './lib/firebase';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut,
+  updateProfile,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs,
+  collection, 
+  query, 
+  where, 
+  orderBy, 
+  limit, 
+  addDoc,
+  serverTimestamp,
+  onSnapshot,
+  deleteDoc
+} from 'firebase/firestore';
 
 type AIState = 'idle' | 'listening' | 'thinking' | 'speaking';
 type ModelMode = 'fast' | 'normal' | 'deep';
@@ -21,12 +45,19 @@ interface Message {
 }
 
 export default function App() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | null>(null);
+  const [isAdminView, setIsAdminView] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
   const [aiState, setAiState] = useState<AIState>('idle');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'ai',
-      content: 'Muraho! I am Gedeon, your AI assistant from Rusizi district, Muganza cell. I am equipped with Vision, Web Search, and multi-tier reasoning. How can I help you today?',
+      content: 'Muraho! I am Gedeon, your AI assistant from Rusizi district, Muganza cell. Please log in to save your history, or chat with me anonymously.',
       timestamp: new Date()
     }
   ]);
@@ -57,6 +88,122 @@ export default function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        // Load user profile and check admin status
+        const userDoc = await getDoc(doc(db, 'users', u.uid));
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          setUserProfile(data);
+          setIsAdmin(data.role === 'admin' || u.email === 'gedeonizabikora37@gmail.com');
+          
+          // Sync admin role if email matches but role is user
+          if (u.email === 'gedeonizabikora37@gmail.com' && data.role !== 'admin') {
+            await setDoc(doc(db, 'users', u.uid), { role: 'admin' }, { merge: true });
+          }
+        } else {
+          // New user logic if needed
+          setUserProfile({ role: 'user' });
+        }
+        
+        // Also check explicit admins collection for extra security
+        const adminDoc = await getDoc(doc(db, 'admins', u.uid));
+        if (adminDoc.exists()) {
+          setIsAdmin(true);
+        }
+
+        // Load chat history
+        loadChatHistory(u.uid);
+      } else {
+        setUserProfile(null);
+        setIsAdmin(false);
+        setMessages([{
+          id: '1',
+          role: 'ai',
+          content: 'Muraho! I am Gedeon, your AI assistant from Rusizi district, Muganza cell. Please log in to save your history, or chat with me anonymously.',
+          timestamp: new Date()
+        }]);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const loadChatHistory = (uid: string) => {
+    const q = query(
+      collection(db, 'chats', uid, 'messages'),
+      orderBy('timestamp', 'asc'),
+      limit(50)
+    );
+    
+    onSnapshot(q, (snapshot) => {
+      const msgs: Message[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        msgs.push({
+          id: doc.id,
+          role: data.role,
+          content: data.content,
+          timestamp: data.timestamp?.toDate() || new Date(),
+          image: data.image
+        });
+      });
+      if (msgs.length > 0) {
+        setMessages(msgs);
+      }
+    });
+  };
+
+  const handleAuth = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setAuthError(null);
+    const formData = new FormData(e.currentTarget);
+    const email = formData.get('email') as string;
+    const password = formData.get('password') as string;
+    const name = formData.get('name') as string;
+
+    try {
+      if (authMode === 'signup') {
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(cred.user, { displayName: name });
+        const role = email === 'gedeonizabikora37@gmail.com' ? 'admin' : 'user';
+        await setDoc(doc(db, 'users', cred.user.uid), {
+          uid: cred.user.uid,
+          email,
+          displayName: name,
+          role,
+          createdAt: serverTimestamp()
+        });
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+      setAuthMode(null);
+    } catch (err: any) {
+      setAuthError(err.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setIsSettingsOpen(false);
+  };
+
+  const persistMessage = async (msg: Message) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'chats', user.uid, 'messages'), {
+        userId: user.uid,
+        role: msg.role,
+        content: msg.content,
+        image: msg.image || null,
+        timestamp: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Error persisting message:", err);
+    }
+  };
 
   useEffect(() => {
     const loadVoices = () => {
@@ -179,6 +326,10 @@ export default function App() {
     const imageToSend = selectedImage;
     setSelectedImage(null);
     
+    if (user) {
+      persistMessage(newUserMsg);
+    }
+
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -189,7 +340,6 @@ export default function App() {
       
       let modelName = 'gemini-3-flash-preview';
       let config: any = {};
-      let tools: any[] = [];
 
       if (modelMode === 'deep') {
         modelName = 'gemini-3.1-pro-preview';
@@ -203,7 +353,7 @@ export default function App() {
       ${responseStyle === 'summarized' ? 'Keep your answers concise, well-arranged, and always provide a brief summary.' : 'Provide well-structured, detailed answers with a clear summary at the end.'}`;
 
       if (isWebSearchEnabled) {
-        tools.push({ googleSearch: {} });
+        config.tools = [{ googleSearch: {} }];
       }
 
       const parts: any[] = [];
@@ -225,7 +375,6 @@ export default function App() {
         model: modelName,
         contents: { parts },
         config: Object.keys(config).length > 0 ? config : undefined,
-        tools: tools.length > 0 ? tools : undefined,
       });
 
       const responseText = response.text || 'I am unable to process that request at the moment.';
@@ -238,6 +387,11 @@ export default function App() {
       };
 
       setMessages(prev => [...prev, newAiMsg]);
+      
+      if (user) {
+        persistMessage(newAiMsg);
+      }
+
       setAiState('speaking');
       
       await playTTS(responseText);
@@ -310,6 +464,81 @@ export default function App() {
       {/* 3D Core Visualizer */}
       <CoreVisualizer state={aiState} />
 
+      {/* Auth Overlay */}
+      <AnimatePresence>
+        {authMode && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-xl p-4"
+          >
+            <motion.form 
+              onSubmit={handleAuth}
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              className="glass-panel p-8 w-full max-w-md space-y-6"
+            >
+              <div className="flex justify-between items-center">
+                <h2 className="text-2xl font-bold text-white">{authMode === 'login' ? 'Login' : 'Create Account'}</h2>
+                <button type="button" onClick={() => setAuthMode(null)} className="p-2 text-nebula-silver hover:text-white transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+
+              {authError && <div className="p-3 bg-red-500/20 border border-red-500/50 text-red-500 text-sm rounded-lg">{authError}</div>}
+
+              {authMode === 'signup' && (
+                <div className="space-y-1">
+                  <label className="text-xs font-mono text-nebula-silver uppercase">Full Name</label>
+                  <input name="name" required className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:border-nebula-cyan" placeholder="Enter your name" />
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="text-xs font-mono text-nebula-silver uppercase">Email Address</label>
+                <input name="email" type="email" required className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:border-nebula-cyan" placeholder="email@example.com" />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-mono text-nebula-silver uppercase">Password</label>
+                <input name="password" type="password" required className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:border-nebula-cyan" placeholder="••••••••" />
+              </div>
+
+              <button type="submit" className="glow-button w-full py-4 text-white font-semibold">
+                {authMode === 'login' ? 'Enter Nebula' : 'Launch AI Assistant'}
+              </button>
+
+              <p className="text-center text-sm text-nebula-silver">
+                {authMode === 'login' ? "Don't have an account?" : "Already a member?"}{' '}
+                <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-nebula-cyan hover:underline">
+                  {authMode === 'login' ? 'Sign up' : 'Login'}
+                </button>
+              </p>
+            </motion.form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Admin View */}
+      <AnimatePresence>
+        {isAdminView && (
+          <motion.div 
+            initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+            className="fixed inset-0 z-[110] bg-[#050505] flex flex-col pt-12 md:pt-0"
+          >
+            <div className="flex items-center justify-between p-6 border-b border-white/10">
+              <button onClick={() => setIsAdminView(false)} className="flex items-center gap-2 text-nebula-silver hover:text-white transition-colors">
+                <ArrowLeft size={20} /> Back to Chat
+              </button>
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <Shield className="text-nebula-purple" /> Admin Central
+              </h2>
+              <div className="text-xs font-mono text-nebula-cyan uppercase">Project Owner Access</div>
+            </div>
+
+            <AdminDashboard />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Main Interface */}
       <div className="relative z-10 w-full max-w-6xl h-full flex flex-col md:flex-row gap-6 p-4 md:p-8">
         
@@ -325,9 +554,31 @@ export default function App() {
                 <p className="text-xs text-nebula-silver font-mono mt-1">Rusizi District // Muganza Cell</p>
               </div>
             </div>
-            <button onClick={() => setIsSettingsOpen(true)} className="glow-button p-2 text-nebula-silver hover:text-white transition-colors">
-              <Settings size={20} />
-            </button>
+            <div className="flex items-center gap-4">
+              {!user ? (
+                <button 
+                  onClick={() => setAuthMode('login')}
+                  className="px-4 py-2 bg-nebula-cyan/10 hover:bg-nebula-cyan/20 text-nebula-cyan text-sm rounded-lg border border-nebula-cyan/30 transition-all font-medium"
+                >
+                  Log In
+                </button>
+              ) : (
+                <div className="flex items-center gap-3">
+                  {isAdmin && (
+                    <button 
+                      onClick={() => setIsAdminView(true)}
+                      className="p-2 text-nebula-purple hover:text-nebula-purple/80 transition-colors"
+                      title="Admin Dashboard"
+                    >
+                      <Shield size={20} />
+                    </button>
+                  )}
+                  <button onClick={() => setIsSettingsOpen(true)} className="glow-button p-2 text-nebula-silver hover:text-white transition-colors">
+                    <Settings size={20} />
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth">
@@ -602,6 +853,28 @@ export default function App() {
               </div>
 
               <div className="space-y-6">
+                {/* User Info */}
+                {user && (
+                   <div className="bg-white/5 rounded-xl p-4 border border-white/5">
+                    <h3 className="text-sm font-medium text-nebula-cyan mb-2 uppercase tracking-wider">Account</h3>
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-nebula-purple/20 flex items-center justify-center text-nebula-purple">
+                        <User size={20} />
+                      </div>
+                      <div>
+                        <p className="text-sm text-white font-medium">{user.displayName || 'User'}</p>
+                        <p className="text-xs text-nebula-silver">{user.email}</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={handleLogout}
+                      className="mt-4 w-full flex items-center justify-center gap-2 py-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors text-sm font-medium"
+                    >
+                      <LogOut size={16} /> Log Out
+                    </button>
+                  </div>
+                )}
+
                 {/* Identity Info */}
                 <div className="bg-white/5 rounded-xl p-4 border border-white/5">
                   <h3 className="text-sm font-medium text-nebula-cyan mb-2 uppercase tracking-wider">AI Identity</h3>
@@ -695,3 +968,88 @@ export default function App() {
     </div>
   );
 }
+
+// --- Sub-Components ---
+
+function AdminDashboard() {
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const snap = await getDocs(collection(db, 'users'));
+        const usersList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setUsers(usersList);
+      } catch (err) {
+        console.error("Error fetching users:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUsers();
+  }, []);
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="glass-panel p-6">
+          <div className="text-nebula-silver text-xs uppercase font-mono mb-2">Total Users</div>
+          <div className="text-4xl font-bold text-white">{users.length}</div>
+        </div>
+        <div className="glass-panel p-6">
+          <div className="text-nebula-silver text-xs uppercase font-mono mb-2">System Version</div>
+          <div className="text-4xl font-bold text-nebula-cyan">v3.1.0</div>
+        </div>
+        <div className="glass-panel p-6">
+          <div className="text-nebula-silver text-xs uppercase font-mono mb-2">Security Status</div>
+          <div className="text-4xl font-bold text-green-500">ACTIVE</div>
+        </div>
+      </div>
+
+      <div className="glass-panel overflow-hidden">
+        <div className="p-4 border-b border-white/10 bg-white/5">
+          <h3 className="text-sm font-mono text-nebula-silver uppercase tracking-wider">Registered Inhabitants</h3>
+        </div>
+        <table className="w-full text-left">
+          <thead className="bg-black/40 text-[10px] font-mono text-nebula-silver uppercase">
+            <tr>
+              <th className="p-4">Name</th>
+              <th className="p-4">Email</th>
+              <th className="p-4">Role</th>
+              <th className="p-4">Joined</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {users.map(u => (
+              <tr key={u.uid} className="hover:bg-white/5 transition-colors">
+                <td className="p-4 text-white text-sm">{u.displayName}</td>
+                <td className="p-4 text-white/60 text-sm">{u.email}</td>
+                <td className="p-4">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${u.role === 'admin' ? 'bg-nebula-purple/20 text-nebula-purple' : 'bg-white/10 text-nebula-silver'}`}>
+                    {u.role}
+                  </span>
+                </td>
+                <td className="p-4 text-nebula-silver text-xs font-mono">
+                  {u.createdAt?.toDate().toLocaleDateString()}
+                </td>
+              </tr>
+            ))}
+            {users.length === 0 && !loading && (
+              <tr>
+                <td colSpan={4} className="p-8 text-center text-nebula-silver italic text-sm">No users found. Admin manual override required?</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl">
+        <h4 className="text-red-500 font-bold flex items-center gap-2 mb-2"><Shield size={16} /> Restricted Actions</h4>
+        <p className="text-xs text-nebula-silver mb-4">Sensitive data operations should only be performed by verified project owners.</p>
+        <button disabled className="opacity-50 px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-bold uppercase tracking-widest cursor-not-allowed">Reset Neural Network</button>
+      </div>
+    </div>
+  );
+}
+

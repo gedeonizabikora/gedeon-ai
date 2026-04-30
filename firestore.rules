@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Helpers ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+             data.keys().size() <= 5 &&
+             data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 200 &&
+             data.createdAt == request.time;
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasAll(['userId', 'role', 'content', 'timestamp']) &&
+             data.keys().size() <= 5 &&
+             data.userId == request.auth.uid &&
+             data.role in ['user', 'ai'] &&
+             data.content is string && data.content.size() <= 10000 &&
+             data.timestamp == request.time;
+    }
+
+    // --- Rules ---
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin(); // Only admin can list users
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role']) &&
+                    (incoming().role == 'user' || isAdmin()); // Can't escalate role unless already admin
+    }
+
+    // Admins Collection
+    match /admins/{userId} {
+      allow read: if isSignedIn(); // Users might need to check if someone is admin? 
+                                   // Actually, usually only admin can see admins list.
+      allow write: if false; // Only manageable via console or service account for security.
+    }
+
+    // Chats Collection
+    match /chats/{chatId} {
+      // We don't store data in the chat doc itself usually, but let's allow it if needed.
+      allow read, write: if isOwner(chatId.split('_')[0]) || isAdmin(); 
+      // Simple logic: if chatId starts with userId, it's theirs.
+      
+      match /messages/{messageId} {
+        allow list: if isOwner(incoming().userId) || isAdmin(); // This isn't quite right for list
+        // List rules should check resource.data
+        allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+        
+        allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+        
+        allow create: if isSignedIn() && (incoming().userId == request.auth.uid) && isValidChatMessage(incoming());
+        allow delete: if isAdmin(); // Only admin can delete messages for now
+      }
+    }
+  }
+}

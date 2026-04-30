@@ -1,6 +1,6 @@
 {
-  "name": "Midnight Nebula AI",
-  "description": "A next-gen voice and text AI assistant interface featuring Glassmorphism 2.0 and a 3D fluid core visualizer.",
+  "name": "Gedeon AI - Midnight Nebula",
+  "description": "An advanced AI assistant from Rusizi District, Muganza Cell, featuring secure authentication, admin controls, and local-first privacy options.",
   "requestFramePermissions": [
     "microphone"
   ]
